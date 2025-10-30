@@ -1,0 +1,60 @@
+{
+  "app": {
+    "name": "Air Waffle Finance",
+    "version": "5.0",
+    "language": "ru"
+  },
+  
+  "database": {
+    "path": "finance_v5.db",
+    "backup_enabled": true,
+    "backup_path": "backups/"
+  },
+  
+  "telegram": {
+    "bot_token": "8188072633:AAE6TavFNHlbyAcfR8Z5Tnsp4jpQsXj1jHw",
+    "enabled": true,
+    "notifications_enabled": false,
+    "admin_chat_id": ""
+  },
+  
+  "payment_methods": {
+    "group_by_type": false,
+    "show_order": ["terminal", "online", "delivery"],
+    "enabled_methods": {
+      "terminals": true,
+      "online": true,
+      "delivery": true
+    }
+  },
+  
+  "reports": {
+    "auto_save": true,
+    "require_cash_count": true,
+    "require_expense_category": false,
+    "allow_negative_cash": false,
+    "warn_threshold_percent": 5.0
+  },
+  
+  "ui": {
+    "theme": "light",
+    "show_balances_on_start": false,
+    "decimal_places": 0,
+    "thousand_separator": ","
+  },
+  
+  "integrations": {
+    "bank_api_enabled": false,
+    "bank_api_url": "",
+    "bank_api_key": "",
+    "export_excel_enabled": true,
+    "export_path": "exports/"
+  },
+  
+  "security": {
+    "require_password": false,
+    "password_hash": "",
+    "session_timeout_minutes": 30,
+    "log_all_actions": true
+  }
+}
