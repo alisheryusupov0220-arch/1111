@@ -47,6 +47,7 @@ class FinanceSystemV5:
                 description TEXT,
                 is_visible INTEGER DEFAULT 1,
                 is_active INTEGER DEFAULT 1,
+                display_order INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (default_account_id) REFERENCES accounts(id)
             )
@@ -175,6 +176,27 @@ class FinanceSystemV5:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_report_payments ON report_payments(report_id)')
         
         self.conn.commit()
+        
+        # Миграция: добавляем колонку display_order если её нет
+        try:
+            cursor.execute('ALTER TABLE payment_methods ADD COLUMN display_order INTEGER DEFAULT 0')
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            # Колонка уже существует, игнорируем ошибку
+            pass
+        
+        # Миграция: добавляем колонки expenses и other_income если их нет
+        try:
+            cursor.execute('ALTER TABLE daily_reports ADD COLUMN expenses TEXT')
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
+        
+        try:
+            cursor.execute('ALTER TABLE daily_reports ADD COLUMN other_income TEXT')
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
     
     # ========== СЧЕТА ==========
     
@@ -236,7 +258,7 @@ class FinanceSystemV5:
                 FROM payment_methods pm
                 LEFT JOIN accounts a ON pm.default_account_id = a.id
                 WHERE pm.is_active=1 AND pm.method_type=?
-                ORDER BY pm.name
+                ORDER BY pm.display_order ASC, pm.name
             ''', (method_type,))
         else:
             cursor.execute('''
@@ -244,13 +266,21 @@ class FinanceSystemV5:
                 FROM payment_methods pm
                 LEFT JOIN accounts a ON pm.default_account_id = a.id
                 WHERE pm.is_active=1
-                ORDER BY pm.method_type, pm.name
+                ORDER BY pm.display_order ASC, pm.method_type, pm.name
             ''')
         return [dict(row) for row in cursor.fetchall()]
     
     def update_payment_method_default_account(self, method_id: int, account_id: int) -> bool:
         cursor = self.conn.cursor()
         cursor.execute('UPDATE payment_methods SET default_account_id=? WHERE id=?', (account_id, method_id))
+        self.conn.commit()
+        return True
+    
+    def update_payment_methods_order(self, ordered_ids: list) -> bool:
+        """Обновить порядок методов оплаты"""
+        cursor = self.conn.cursor()
+        for order, method_id in enumerate(ordered_ids):
+            cursor.execute('UPDATE payment_methods SET display_order=? WHERE id=?', (order, method_id))
         self.conn.commit()
         return True
     
@@ -435,33 +465,43 @@ class FinanceSystemV5:
         for acc in accounts:
             acc_id = acc['id']
             
-            # Приходы от продаж
-            cursor.execute('''
-                SELECT SUM(net_amount) FROM report_payments WHERE account_id=?
-            ''', (acc_id,))
-            sales_income = cursor.fetchone()[0] or 0
-            
-            # Для кассы - добавляем наличные из отчётов
             if acc['account_type'] == 'cash':
+                # ДЛЯ КАССЫ - просто берём cash_actual (это уже итог)
+                # cash_actual = подсчёт купюр (факт), уже учитывает всё
                 cursor.execute('''
-                    SELECT SUM(cash_actual) FROM daily_reports
+                    SELECT SUM(cash_actual) 
+                    FROM daily_reports 
+                    WHERE status='closed'
                 ''')
-                cash_from_reports = cursor.fetchone()[0] or 0
-                sales_income += cash_from_reports
-            
-            # Приходы не от продаж
-            cursor.execute('''
-                SELECT SUM(amount) FROM non_sales_income WHERE account_id=?
-            ''', (acc_id,))
-            non_sales = cursor.fetchone()[0] or 0
-            
-            # Расходы
-            cursor.execute('''
-                SELECT SUM(amount) FROM report_expenses WHERE account_id=?
-            ''', (acc_id,))
-            expenses = cursor.fetchone()[0] or 0
-            
-            balance = sales_income + non_sales - expenses
+                balance = cursor.fetchone()[0] or 0
+                
+                # Для кассы не учитываем расходы и приходы отдельно
+                # они УЖЕ учтены в cash_actual при создании отчёта
+                sales_income = balance
+                non_sales = 0
+                expenses = 0
+                
+            else:
+                # ДЛЯ РС - считаем через платежи и отдельно приходы/расходы
+                # Приходы от продаж (net_amount после комиссии)
+                cursor.execute('''
+                    SELECT SUM(net_amount) FROM report_payments WHERE account_id=?
+                ''', (acc_id,))
+                sales_income = cursor.fetchone()[0] or 0
+                
+                # Приходы не от продаж (например, перевод на РС)
+                cursor.execute('''
+                    SELECT SUM(amount) FROM non_sales_income WHERE account_id=?
+                ''', (acc_id,))
+                non_sales = cursor.fetchone()[0] or 0
+                
+                # Расходы (например, списание с РС)
+                cursor.execute('''
+                    SELECT SUM(amount) FROM report_expenses WHERE account_id=?
+                ''', (acc_id,))
+                expenses = cursor.fetchone()[0] or 0
+                
+                balance = sales_income + non_sales - expenses
             
             result[acc_id] = {
                 'name': acc['name'],
@@ -473,6 +513,97 @@ class FinanceSystemV5:
             }
         
         return result
+    
+    def get_account_history(self, account_id: int) -> list:
+        """Получить историю операций по счёту"""
+        cursor = self.conn.cursor()
+        history = []
+        
+        # Получаем информацию о счёте
+        cursor.execute('SELECT name, account_type FROM accounts WHERE id=?', (account_id,))
+        account = cursor.fetchone()
+        if not account:
+            return []
+        
+        account_type = account['account_type']
+        
+        if account_type == 'cash':
+            # ДЛЯ КАССЫ - наличные из отчётов
+            cursor.execute('''
+                SELECT 
+                    dr.report_date as date,
+                    dr.id as report_id,
+                    dr.cash_actual as amount,
+                    'Продажи наличными' as description,
+                    '+' as operation_type,
+                    l.name as location
+                FROM daily_reports dr
+                LEFT JOIN locations l ON dr.location_id = l.id
+                WHERE dr.status = 'closed'
+                ORDER BY dr.report_date DESC
+            ''')
+            for row in cursor.fetchall():
+                history.append(dict(row))
+        else:
+            # ДЛЯ РС - платежи (приходы)
+            cursor.execute('''
+                SELECT 
+                    dr.report_date as date,
+                    rp.report_id,
+                    rp.net_amount as amount,
+                    pm.name as description,
+                    '+' as operation_type,
+                    l.name as location
+                FROM report_payments rp
+                JOIN daily_reports dr ON rp.report_id = dr.id
+                JOIN payment_methods pm ON rp.payment_method_id = pm.id
+                LEFT JOIN locations l ON dr.location_id = l.id
+                WHERE rp.account_id = ?
+                ORDER BY dr.report_date DESC
+            ''', (account_id,))
+            for row in cursor.fetchall():
+                history.append(dict(row))
+        
+        # Приходы не от продаж
+        cursor.execute('''
+            SELECT 
+                dr.report_date as date,
+                nsi.report_id,
+                nsi.amount,
+                nsi.description,
+                '+' as operation_type,
+                l.name as location
+            FROM non_sales_income nsi
+            JOIN daily_reports dr ON nsi.report_id = dr.id
+            LEFT JOIN locations l ON dr.location_id = l.id
+            WHERE nsi.account_id = ?
+            ORDER BY dr.report_date DESC
+        ''', (account_id,))
+        for row in cursor.fetchall():
+            history.append(dict(row))
+        
+        # Расходы (минус)
+        cursor.execute('''
+            SELECT 
+                dr.report_date as date,
+                re.report_id,
+                re.amount,
+                re.description,
+                '-' as operation_type,
+                l.name as location
+            FROM report_expenses re
+            JOIN daily_reports dr ON re.report_id = dr.id
+            LEFT JOIN locations l ON dr.location_id = l.id
+            WHERE re.account_id = ?
+            ORDER BY dr.report_date DESC
+        ''', (account_id,))
+        for row in cursor.fetchall():
+            history.append(dict(row))
+        
+        # Сортируем по дате
+        history.sort(key=lambda x: x['date'], reverse=True)
+        
+        return history
     
     def close(self):
         if self.conn:
@@ -610,7 +741,7 @@ class FinanceSystemV5:
         
         return [dict(row) for row in cursor.fetchall()]
     
-    def get_reports(self, limit: int = 50, location_id: int = None) -> list:
+    def get_reports(self, limit: int = 50, location_id: int = None, status: str = None) -> list:
         """Получить список отчётов"""
         cursor = self.conn.cursor()
         
@@ -622,9 +753,18 @@ class FinanceSystemV5:
         '''
         
         params = []
+        conditions = []
+        
         if location_id:
-            query += ' WHERE dr.location_id = ?'
+            conditions.append('dr.location_id = ?')
             params.append(location_id)
+        
+        if status:
+            conditions.append('dr.status = ?')
+            params.append(status)
+        
+        if conditions:
+            query += ' WHERE ' + ' AND '.join(conditions)
         
         query += ' ORDER BY dr.report_date DESC, dr.id DESC LIMIT ?'
         params.append(limit)

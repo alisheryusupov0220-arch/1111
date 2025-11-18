@@ -1,0 +1,73 @@
+=== СКОПИРУЙ ЭТОТ ТЕКСТ В CURSOR CHAT ===
+
+Привет! Мне нужно интегрировать новые модули в проект.
+
+ЗАДАЧА:
+1. Обнови базу данных migration_hierarchy.sql
+2. Добавь файлы category_manager.py и analytics.py в проект
+3. Измени main_app.py - добавь новые кнопки и методы
+
+ДЕТАЛИ:
+
+## 1. ОБНОВИ БД:
+Выполни: `sqlite3 finance_v5.db < migration_hierarchy.sql`
+
+## 2. СКОПИРУЙ ФАЙЛЫ:
+Положи category_manager.py и analytics.py в ту же папку где main_app.py
+
+## 3. ИЗМЕНИ main_app.py:
+
+### В методе create_main_screen() (строка ~70):
+
+БЫЛО:
+```python
+buttons = [
+    ...
+    ("📂 Категории расходов", self.manage_categories, 2, 0),
+    ("⚙️ Настройки", self.open_settings, 2, 1),
+    ("🤖 Telegram бот", self.telegram_status, 2, 2),
+]
+
+for i in range(3):
+    main_frame.grid_rowconfigure(i, weight=1)
+```
+
+СТАЛО:
+```python
+buttons = [
+    ...
+    ("📂 Категории (старые)", self.manage_categories, 2, 0),
+    ("🌳 Категории (новые)", self.manage_categories_new, 2, 1),
+    ("📊 Аналитика", self.show_analytics, 2, 2),
+    ("⚙️ Настройки", self.open_settings, 3, 0),
+    ("🤖 Telegram бот", self.telegram_status, 3, 1),
+]
+
+for i in range(4):  # ИЗМЕНИЛ С 3 НА 4!
+    main_frame.grid_rowconfigure(i, weight=1)
+```
+
+### Добавь два новых метода в класс MainApp (после строки ~200):
+
+```python
+def manage_categories_new(self):
+    """Управление категориями с иерархией"""
+    from category_manager import CategoryManager
+    CategoryManager(self.db)
+
+def show_analytics(self):
+    """Показать аналитику"""
+    from analytics import AnalyticsWindow
+    AnalyticsWindow(self.db)
+```
+
+ПРОВЕРЬ:
+- Файлы category_manager.py и analytics.py в правильной папке
+- Миграция БД выполнена
+- Код main_app.py обновлён
+
+Запусти: `python3 main_app.py`
+
+Должны появиться 2 новые кнопки и всё работать!
+
+=== КОНЕЦ ПРОМПТА ===
