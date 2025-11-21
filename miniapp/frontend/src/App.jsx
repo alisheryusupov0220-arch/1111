@@ -13,6 +13,8 @@ import Home from './pages/Home';
 import Timeline from './pages/Timeline';
 import Analytics from './pages/Analytics';
 import Profile from './pages/Profile';
+import Users from './pages/Users';
+import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 
 export default function App() {
@@ -42,14 +44,20 @@ export default function App() {
         localStorage.setItem('telegram_id', telegramId);
         console.log('5. Сохранили в localStorage');
 
-        // Отправляем запрос на регистрацию/вход
+        // Отправляем запрос на регистрацию/вход (передаём дополнительные поля из Telegram)
         console.log('6. Отправляем запрос на /auth/verify');
-        const userData = await api.verifyUser(telegramId);
-        
+        const response = await api.verifyUser(telegramId, {
+          username: user?.username || '',
+          first_name: user?.first_name || '',
+          last_name: user?.last_name || ''
+        });
+        const userData = response.data;
         console.log('7. Получили ответ от сервера:', userData);
-        
+
         // НОВОЕ: Сохраняем user_id для проверки владения операциями
-        localStorage.setItem('current_user_id', userData.id.toString());
+        if (userData?.id) {
+          localStorage.setItem('current_user_id', userData.id.toString());
+        }
 
         setCurrentUser(userData);
         setAuthenticated(true);
@@ -91,8 +99,10 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/timeline" element={<Timeline />} />
         <Route path="/analytics" element={<Analytics />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/settings" element={<Settings />} />
+  <Route path="/profile" element={<Profile />} />
+  <Route path="/users" element={<Users />} />
+  <Route path="/reports" element={<Reports />} />
+  <Route path="/settings" element={<Settings />} />
       </Routes>
 
       {!showAdd && (

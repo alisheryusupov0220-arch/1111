@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from analytics import dashboard, pivot_table, get_trend_data, get_cell_details
 # -----------------------------
 
-from database import db_session
+from database import db_session, get_connection
+import sqlite3
 
 
 class TimelineItem(BaseModel):
@@ -104,54 +105,143 @@ def row_to_dict(row) -> dict:
     return {key: row[key] for key in row.keys()}
 
 
-@app.post("/auth/verify", response_model=UserResponse)
-async def verify_telegram_user(auth: TelegramAuthRequest):
-    """
-    Регистрация или вход пользователя через Telegram
-    """
-    with db_session() as conn:
+@app.post("/auth/verify")
+async def verify_user(request: dict):
+    """Регистрация/вход через Telegram ID"""
+    try:
+        telegram_id = request.get('telegram_id')
+        
+        if not telegram_id:
+            raise HTTPException(status_code=400, detail="telegram_id is required")
+        
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        
         # Проверяем существует ли пользователь
-        cursor = conn.execute(
+        user = conn.execute(
             "SELECT * FROM users WHERE telegram_id = ?",
-            (auth.telegram_id,)
-        )
-        user = cursor.fetchone()
+            (telegram_id,)
+        ).fetchone()
         
         if user:
-            # Пользователь существует - обновляем данные
-            full_name = f"{auth.first_name or ''} {auth.last_name or ''}".strip()
-            conn.execute(
-                """
-                UPDATE users 
-                SET username = ?, full_name = ?
-                WHERE telegram_id = ?
-                """,
-                (auth.username, full_name, auth.telegram_id)
-            )
-            # Получаем обновленного пользователя
-            cursor = conn.execute(
-                "SELECT * FROM users WHERE telegram_id = ?",
-                (auth.telegram_id,)
-            )
-            user = cursor.fetchone()
-        else:
-            # Новый пользователь - создаём
-            full_name = f"{auth.first_name or ''} {auth.last_name or ''}".strip()
-            cursor = conn.execute(
-                """
-                INSERT INTO users (telegram_id, username, full_name, role, is_active)
-                VALUES (?, ?, ?, 'owner', 1)
-                """,
-                (auth.telegram_id, auth.username, full_name)
-            )
-            user_id = cursor.lastrowid
-            cursor = conn.execute(
-                "SELECT * FROM users WHERE id = ?",
-                (user_id,)
-            )
-            user = cursor.fetchone()
+            conn.close()
+            return dict(user)
         
-        return row_to_dict(user)
+        # Создаём нового пользователя
+        username = request.get('username', '')
+        first_name = request.get('first_name', '')
+        last_name = request.get('last_name', '')
+        full_name = f"{first_name} {last_name}".strip() or username or f"User_{telegram_id}"
+        
+        cursor = conn.execute("""
+            INSERT INTO users (telegram_id, username, full_name, role, is_active)
+            VALUES (?, ?, ?, 'owner', 1)
+        """, (telegram_id, username, full_name))
+        
+        user_id = cursor.lastrowid
+        conn.commit()
+        
+        # Получаем созданного пользователя
+        new_user = conn.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+        
+        conn.close()
+        return dict(new_user)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/users")
+async def get_all_users(current_user_id: int = Depends(get_current_user_id)):
+    """Получить список всех пользователей (только для owner/manager)"""
+    with db_session() as conn:
+        # Проверяем роль текущего пользователя
+        current_user = conn.execute(
+            "SELECT role FROM users WHERE id = ?",
+            (current_user_id,)
+        ).fetchone()
+
+        if not current_user or current_user['role'] not in ['owner', 'manager']:
+            raise HTTPException(status_code=403, detail="Access denied. Owner or Manager role required")
+
+        # Получаем всех пользователей
+        users = conn.execute("""
+            SELECT 
+                id,
+                telegram_id,
+                username,
+                full_name,
+                role,
+                is_active,
+                created_at
+            FROM users
+            ORDER BY created_at DESC
+        """
+        ).fetchall()
+
+        return [row_to_dict(user) for user in users]
+
+
+@app.put("/users/{user_id}/role")
+async def update_user_role(
+    user_id: int,
+    role: str,
+    current_user_id: int = Depends(get_current_user_id)
+):
+    """Изменить роль пользователя (только owner)"""
+    if role not in ['owner', 'manager', 'accountant', 'cashier']:
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    with db_session() as conn:
+        # Проверяем что текущий пользователь - owner
+        current_user = conn.execute(
+            "SELECT role FROM users WHERE id = ?",
+            (current_user_id,)
+        ).fetchone()
+
+        if not current_user or current_user['role'] != 'owner':
+            raise HTTPException(status_code=403, detail="Access denied. Owner role required")
+
+        # Обновляем роль
+        conn.execute(
+            "UPDATE users SET role = ? WHERE id = ?",
+            (role, user_id)
+        )
+
+        return {"success": True, "message": "Role updated"}
+
+
+@app.put("/users/{user_id}/status")
+async def toggle_user_status(
+    user_id: int,
+    is_active: bool,
+    current_user_id: int = Depends(get_current_user_id)
+):
+    """Активировать/деактивировать пользователя (только owner)"""
+    with db_session() as conn:
+        # Проверяем что текущий пользователь - owner
+        current_user = conn.execute(
+            "SELECT role FROM users WHERE id = ?",
+            (current_user_id,)
+        ).fetchone()
+
+        if not current_user or current_user['role'] != 'owner':
+            raise HTTPException(status_code=403, detail="Access denied. Owner role required")
+
+        # Проверяем что не деактивируем самого себя
+        if user_id == current_user_id and not is_active:
+            raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
+
+        # Обновляем статус
+        conn.execute(
+            "UPDATE users SET is_active = ? WHERE id = ?",
+            (1 if is_active else 0, user_id)
+        )
+
+        return {"success": True, "message": "Status updated"}
 
 
 @app.get("/timeline", response_model=List[TimelineItem])
@@ -1147,4 +1237,318 @@ async def get_account_chart(
                 'balance': cumulative_balance
             })
         
+        return result
+
+
+# ========== КАССИРСКИЕ ОТЧЁТЫ ==========
+
+@app.get("/cashier/locations")
+async def get_locations():
+    """Получить список точек продаж"""
+    with db_session() as conn:
+        cursor = conn.execute(
+            """
+            SELECT id, name, address, is_active 
+            FROM locations 
+            WHERE is_active = 1
+            ORDER BY name
+            """
+        )
+        locations = cursor.fetchall()
+        return [row_to_dict(loc) for loc in locations]
+
+
+@app.get("/cashier/payment-methods")
+async def get_payment_methods():
+    """Получить методы оплаты"""
+    with db_session() as conn:
+        cursor = conn.execute(
+            """
+            SELECT id, name, method_type, commission_percent, is_active 
+            FROM payment_methods 
+            WHERE is_active = 1
+            ORDER BY name
+            """
+        )
+        methods = cursor.fetchall()
+        return [row_to_dict(m) for m in methods]
+
+
+@app.post("/cashier/reports")
+async def create_cashier_report(
+    report_data: dict,
+    current_user_id: int = Depends(get_current_user_id)
+):
+    """
+    ГЛАВНЫЙ ENDPOINT: Получить отчёт от кассирского приложения
+    """
+    with db_session() as conn:
+        # Проверяем существование отчёта
+        existing = conn.execute(
+            """
+            SELECT id FROM cashier_reports 
+            WHERE report_date = ? AND location_id = ?
+            """,
+            (report_data['report_date'], report_data['location_id'])
+        ).fetchone()
+
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Отчёт за {report_data['report_date']} для этой точки уже существует"
+            )
+
+        # Создаём отчёт
+        cursor = conn.execute(
+            """
+            INSERT INTO cashier_reports (
+                report_date, location_id, user_id, total_sales,
+                cash_actual, status, closed_at
+            ) VALUES (?, ?, ?, ?, ?, 'closed', CURRENT_TIMESTAMP)
+            """,
+            (
+                report_data['report_date'],
+                report_data['location_id'],
+                current_user_id,
+                report_data['total_sales'],
+                report_data.get('cash_actual', 0)
+            )
+        )
+        report_id = cursor.lastrowid
+
+        # Добавляем платежи
+        for payment in report_data.get('payments', []):
+            if payment['amount'] > 0:
+                # Получаем процент комиссии
+                method = conn.execute(
+                    "SELECT commission_percent FROM payment_methods WHERE id = ?",
+                    (payment['payment_method_id'],)
+                ).fetchone()
+
+                commission_percent = method['commission_percent'] if method else 0
+                commission_amount = payment['amount'] * commission_percent / 100
+                net_amount = payment['amount'] - commission_amount
+
+                conn.execute(
+                    """
+                    INSERT INTO cashier_report_payments (
+                        report_id, payment_method_id, amount, 
+                        commission_amount, net_amount
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (report_id, payment['payment_method_id'], 
+                      payment['amount'], commission_amount, net_amount)
+                )
+
+                # Создаём income операцию в timeline (если метод не "наличные")
+                method_info = conn.execute(
+                    "SELECT name, method_type FROM payment_methods WHERE id = ?",
+                    (payment['payment_method_id'],)
+                ).fetchone()
+
+                if method_info and method_info['method_type'] != 'cash':
+                    # Находим категорию "Выручка" или создаём
+                    income_cat = conn.execute(
+                        "SELECT id FROM income_categories WHERE name = 'Выручка' LIMIT 1"
+                    ).fetchone()
+
+                    if not income_cat:
+                        cur = conn.execute(
+                            "INSERT INTO income_categories (name, is_active) VALUES ('Выручка', 1)"
+                        )
+                        income_cat_id = cur.lastrowid
+                    else:
+                        income_cat_id = income_cat['id']
+
+                    # Находим счёт или создаём по типу метода
+                    account = conn.execute(
+                        "SELECT id FROM accounts WHERE name LIKE ? LIMIT 1",
+                        (f"%{method_info['name']}%",)
+                    ).fetchone()
+
+                    if not account:
+                        # Создаём базовый банковский счёт
+                        cur = conn.execute(
+                            "INSERT INTO accounts (name, type, account_type, is_active) VALUES (?, 'bank', 'bank', 1)",
+                            (method_info['name'],)
+                        )
+                        account_id = cur.lastrowid
+                    else:
+                        account_id = account['id']
+
+                    # Создаём income операцию
+                    conn.execute("""
+                        INSERT INTO timeline (
+                            date, type, category_id, account_id,
+                            amount, description, user_id
+                        ) VALUES (?, 'income', ?, ?, ?, ?, ?)
+                    """, (
+                        report_data['report_date'],
+                        income_cat_id,
+                        account_id,
+                        net_amount,
+                        f"Выручка ({method_info['name']}) - Отчёт кассира",
+                        current_user_id
+                    ))
+
+        # Добавляем расходы
+        for expense in report_data.get('expenses', []):
+            if expense['amount'] > 0:
+                conn.execute("""
+                    INSERT INTO cashier_report_expenses (
+                        report_id, category_id, amount, description
+                    ) VALUES (?, ?, ?, ?)
+                """, (report_id, expense.get('category_id'), 
+                      expense['amount'], expense.get('description', '')))
+
+                # Создаём expense операцию в timeline
+                if expense.get('category_id'):
+                    cash_account = conn.execute(
+                        "SELECT id FROM accounts WHERE type = 'cash' LIMIT 1"
+                    ).fetchone()
+
+                    if cash_account:
+                        conn.execute("""
+                            INSERT INTO timeline (
+                                date, type, category_id, account_id,
+                                amount, description, user_id
+                            ) VALUES (?, 'expense', ?, ?, ?, ?, ?)
+                        """, (
+                            report_data['report_date'],
+                            expense['category_id'],
+                            cash_account['id'],
+                            expense['amount'],
+                            expense.get('description', 'Расход из отчёта кассира'),
+                            current_user_id
+                        ))
+
+        # Добавляем прочие приходы
+        for income in report_data.get('incomes', []):
+            if income['amount'] > 0:
+                conn.execute("""
+                    INSERT INTO cashier_report_income (
+                        report_id, category_id, amount, description
+                    ) VALUES (?, ?, ?, ?)
+                """, (report_id, income.get('category_id'), 
+                      income['amount'], income.get('description', '')))
+
+                # Создаём income операцию в timeline
+                if income.get('category_id'):
+                    cash_account = conn.execute(
+                        "SELECT id FROM accounts WHERE type = 'cash' LIMIT 1"
+                    ).fetchone()
+
+                    if cash_account:
+                        conn.execute("""
+                            INSERT INTO timeline (
+                                date, type, category_id, account_id,
+                                amount, description, user_id
+                            ) VALUES (?, 'income', ?, ?, ?, ?, ?)
+                        """, (
+                            report_data['report_date'],
+                            income['category_id'],
+                            cash_account['id'],
+                            income['amount'],
+                            income.get('description', 'Приход из отчёта кассира'),
+                            current_user_id
+                        ))
+
+        return {
+            "success": True,
+            "message": "Отчёт успешно сохранён",
+            "report_id": report_id
+        }
+
+
+@app.get("/cashier/reports")
+async def get_cashier_reports(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    location_id: Optional[int] = None,
+    current_user_id: int = Depends(get_current_user_id)
+):
+    """Получить список кассирских отчётов"""
+    with db_session() as conn:
+        query = """
+            SELECT 
+                cr.*,
+                l.name as location_name,
+                u.full_name as cashier_name,
+                u.username as cashier_username
+            FROM cashier_reports cr
+            LEFT JOIN locations l ON cr.location_id = l.id
+            LEFT JOIN users u ON cr.user_id = u.id
+            WHERE 1=1
+        """
+        params = []
+        if start_date:
+            query += " AND cr.report_date >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND cr.report_date <= ?"
+            params.append(end_date)
+        if location_id:
+            query += " AND cr.location_id = ?"
+            params.append(location_id)
+        query += " ORDER BY cr.report_date DESC, cr.created_at DESC"
+
+        reports = conn.execute(query, params).fetchall()
+        return [row_to_dict(r) for r in reports]
+
+
+@app.get("/cashier/reports/{report_id}")
+async def get_cashier_report_details(
+    report_id: int,
+    current_user_id: int = Depends(get_current_user_id)
+):
+    """Получить детали отчёта"""
+    with db_session() as conn:
+        report = conn.execute("""
+            SELECT 
+                cr.*,
+                l.name as location_name,
+                u.full_name as cashier_name,
+                u.username as cashier_username
+            FROM cashier_reports cr
+            LEFT JOIN locations l ON cr.location_id = l.id
+            LEFT JOIN users u ON cr.user_id = u.id
+            WHERE cr.id = ?
+        """, (report_id,)).fetchone()
+
+        if not report:
+            raise HTTPException(status_code=404, detail="Отчёт не найден")
+
+        result = row_to_dict(report)
+
+        payments = conn.execute("""
+            SELECT 
+                crp.*,
+                pm.name as payment_method_name,
+                pm.method_type
+            FROM cashier_report_payments crp
+            LEFT JOIN payment_methods pm ON crp.payment_method_id = pm.id
+            WHERE crp.report_id = ?
+        """, (report_id,)).fetchall()
+        result['payments'] = [row_to_dict(p) for p in payments]
+
+        expenses = conn.execute("""
+            SELECT 
+                cre.*,
+                ec.name as category_name
+            FROM cashier_report_expenses cre
+            LEFT JOIN expense_categories ec ON cre.category_id = ec.id
+            WHERE cre.report_id = ?
+        """, (report_id,)).fetchall()
+        result['expenses'] = [row_to_dict(e) for e in expenses]
+
+        incomes = conn.execute("""
+            SELECT 
+                cri.*,
+                ic.name as category_name
+            FROM cashier_report_income cri
+            LEFT JOIN income_categories ic ON cri.category_id = ic.id
+            WHERE cri.report_id = ?
+        """, (report_id,)).fetchall()
+        result['incomes'] = [row_to_dict(i) for i in incomes]
+
         return result

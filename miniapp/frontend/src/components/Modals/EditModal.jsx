@@ -85,19 +85,28 @@ export default function EditModal({ item, onClose, onSave }) {
           </button>
         </div>
 
-        {/* Показываем информацию о создателе */}
-        {item && (item.created_by_name || item.created_by_username) && (
-          <div className="mb-4 p-3 bg-gray-100 rounded-xl">
-            <div className="text-sm text-gray-600">
-              👤 Создал: <span className="font-medium">{item.created_by_name || item.created_by_username}</span>
+        {/* Информация об авторе операции */}
+        <div className={`mb-4 p-3 rounded-lg ${
+          isOwner 
+            ? 'bg-green-50 border border-green-200' 
+            : 'bg-yellow-50 border border-yellow-200'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">
+                {isOwner ? '✏️ Ваша операция' : '👤 Чужая операция'}
+              </span>
+              <span className="text-sm text-gray-600">
+                • Создал: {item.created_by_name || item.created_by_username || 'Неизвестно'}
+              </span>
             </div>
             {!isOwner && (
-              <div className="text-xs text-orange-600 mt-1">
-                ⚠️ Вы можете только просматривать эту операцию
-              </div>
+              <span className="text-xs text-yellow-700 font-medium">
+                🔒 Только просмотр
+              </span>
             )}
           </div>
-        )}
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -136,31 +145,31 @@ export default function EditModal({ item, onClose, onSave }) {
             />
           </div>
 
-          {isOwner ? (
-            <div className="flex gap-3">
-              <button
-                type="submit"
-                className="flex-1 bg-blue-500 text-white py-4 rounded-xl font-bold text-lg hover:bg-blue-600 transition"
-              >
-                💾 Сохранить
-              </button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                className="px-6 bg-red-500 text-white py-4 rounded-xl font-bold text-lg hover:bg-red-600 transition"
-              >
-                🗑️
-              </button>
-            </div>
-          ) : (
+          <div className="flex gap-3">
+            <button
+              type="submit"
+              disabled={!isOwner}
+              className={`flex-1 py-3 rounded-xl font-semibold transition ${
+                isOwner
+                  ? 'bg-purple-500 text-white hover:bg-purple-600'
+                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              {isOwner ? '💾 Сохранить изменения' : '🔒 Редактирование запрещено'}
+            </button>
             <button
               type="button"
-              onClick={onClose}
-              className="w-full bg-gray-500 text-white py-4 rounded-xl font-bold text-lg"
+              onClick={handleDelete}
+              disabled={!isOwner}
+              className={`flex-1 py-3 rounded-xl font-semibold transition ${
+                isOwner
+                  ? 'bg-red-500 text-white hover:bg-red-600'
+                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              }`}
             >
-              Закрыть
+              {isOwner ? '🗑️ Удалить операцию' : '🔒 Удаление запрещено'}
             </button>
-          )}
+          </div>
         </form>
       </div>
     </div>

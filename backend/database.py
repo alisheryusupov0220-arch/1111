@@ -4,9 +4,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    # python-dotenv not installed in this environment — continue without loading .env
+    pass
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = Path("/Users/alisheryusupov2002/Desktop/finance_system_v5/finance_v5.db")
@@ -30,4 +33,107 @@ def db_session() -> Generator[sqlite3.Connection, None, None]:
         raise
     finally:
         conn.close()
+
+
+def init_cashier_reports_tables():
+    """Инициализация таблиц для кассирских отчётов"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Таблица точек продаж
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            address TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Таблица методов оплаты
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payment_methods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            method_type TEXT CHECK (method_type IN ('terminal', 'online', 'delivery', 'cash')),
+            commission_percent REAL DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Основная таблица отчётов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cashier_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_date TEXT NOT NULL,
+            location_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            total_sales REAL NOT NULL,
+            cash_expected REAL,
+            cash_actual REAL,
+            cash_difference REAL,
+            status TEXT DEFAULT 'open' CHECK (status IN ('open', 'closed', 'verified')),
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            closed_at TEXT,
+            notes TEXT,
+            FOREIGN KEY (location_id) REFERENCES locations(id),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            UNIQUE(report_date, location_id)
+        )
+    ''')
+    
+    # Детали по методам оплаты
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cashier_report_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER NOT NULL,
+            payment_method_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            commission_amount REAL DEFAULT 0,
+            net_amount REAL NOT NULL,
+            FOREIGN KEY (report_id) REFERENCES cashier_reports(id) ON DELETE CASCADE,
+            FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id)
+        )
+    ''')
+    
+    # Расходы в отчёте
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cashier_report_expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER NOT NULL,
+            category_id INTEGER,
+            amount REAL NOT NULL,
+            description TEXT,
+            FOREIGN KEY (report_id) REFERENCES cashier_reports(id) ON DELETE CASCADE,
+            FOREIGN KEY (category_id) REFERENCES expense_categories(id)
+        )
+    ''')
+    
+    # Прочие приходы в отчёте
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cashier_report_income (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id INTEGER NOT NULL,
+            category_id INTEGER,
+            amount REAL NOT NULL,
+            description TEXT,
+            FOREIGN KEY (report_id) REFERENCES cashier_reports(id) ON DELETE CASCADE,
+            FOREIGN KEY (category_id) REFERENCES income_categories(id)
+        )
+    ''')
+    
+    # Индексы
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_cashier_reports_date ON cashier_reports(report_date)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_cashier_reports_location ON cashier_reports(location_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_cashier_reports_user ON cashier_reports(user_id)')
+    
+    conn.commit()
+    conn.close()
+    print("✅ Таблицы для кассирских отчётов созданы")
+
+
+if __name__ == "__main__":
+    init_cashier_reports_tables()
 

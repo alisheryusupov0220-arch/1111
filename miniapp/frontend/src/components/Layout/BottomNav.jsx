@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { id: 'add', icon: '', label: '', path: '' }, // пустое место под FAB
   { id: 'analytics', icon: '📈', label: 'Аналитика', path: '/analytics' },
   { id: 'settings', icon: '⚙️', label: 'Настройки', path: '/settings' },
+  { id: 'reports', icon: '�', label: 'Отчёты', path: '/reports' },
   { id: 'profile', icon: '👤', label: 'Профиль', path: '/profile' }
 ];
 

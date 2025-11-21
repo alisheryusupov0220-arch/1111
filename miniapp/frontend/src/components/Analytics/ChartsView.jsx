@@ -15,6 +15,25 @@ export default function ChartsView() {
   const [data, setData] = useState([]);
   const [days, setDays] = useState(30);
 
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload || !payload.length) return null;
+    const op = payload[0].payload || {};
+    return (
+      <div className="bg-white p-2 rounded shadow-sm text-sm">
+        <div className="font-medium mb-1">{tooltipLabelFormatter(label)}</div>
+        {payload.map((p) => (
+          <div key={p.dataKey} className="flex justify-between">
+            <div className="text-gray-700">{p.name}</div>
+            <div className="font-semibold">{tooltipFormatter(p.value)}</div>
+          </div>
+        ))}
+        {(op.created_by_name || op.created_by_username) && (
+          <div className="text-xs text-gray-500 mt-2">Создал: {op.created_by_name || op.created_by_username}</div>
+        )}
+      </div>
+    );
+  };
+
   useEffect(() => {
     loadData();
   }, [days]);
@@ -73,7 +92,7 @@ export default function ChartsView() {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="date" tickFormatter={formatDateTick} />
             <YAxis tickFormatter={formatAmountTick} />
-            <Tooltip formatter={tooltipFormatter} labelFormatter={tooltipLabelFormatter} />
+            <Tooltip content={<CustomTooltip />} />
             <Legend />
             <Line type="monotone" dataKey="revenue" stroke="#10B981" name="Выручка" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="expenses" stroke="#EF4444" name="Расходы" strokeWidth={2} dot={false} />
@@ -88,7 +107,7 @@ export default function ChartsView() {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="date" tickFormatter={formatDateTick} />
             <YAxis tickFormatter={formatAmountTick} />
-            <Tooltip formatter={tooltipFormatter} labelFormatter={tooltipLabelFormatter} />
+            <Tooltip content={<CustomTooltip />} />
             <Line type="monotone" dataKey="profit" stroke="#3B82F6" name="Прибыль" strokeWidth={2} dot={false} />
           </LineChart>
         </ResponsiveContainer>

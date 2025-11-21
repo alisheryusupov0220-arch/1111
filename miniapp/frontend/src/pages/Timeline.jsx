@@ -302,12 +302,30 @@ export default function Timeline() {
                               </>
                             )}
                           </div>
-                          {(op.created_by_name || op.created_by_username) && (
-                            <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-                              <span>👤</span>
-                              <span>{op.created_by_name || op.created_by_username}</span>
+                          {/* Информация об авторе */}
+                          <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500">
+                                👤 {op.created_by_name || op.created_by_username || 'Неизвестно'}
+                              </span>
+                              {op.created_by_username && (
+                                <span className="text-xs text-gray-400">
+                                  @{op.created_by_username}
+                                </span>
+                              )}
                             </div>
-                          )}
+                            
+                            {/* Индикатор: можно редактировать или нет */}
+                            {op.user_id === parseInt(localStorage.getItem('current_user_id')) ? (
+                              <span className="text-xs px-2 py-0.5 bg-green-50 text-green-600 rounded-full">
+                                ✏️ Можно редактировать
+                              </span>
+                            ) : (
+                              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">
+                                🔒 Только просмотр
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div

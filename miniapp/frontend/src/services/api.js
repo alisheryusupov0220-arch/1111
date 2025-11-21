@@ -20,10 +20,18 @@ api.interceptors.request.use((config) => {
 
 export default {
   // === АУТЕНТИФИКАЦИЯ ===
-  async verifyUser(telegram_id) {
-    const { data } = await api.post('/auth/verify', { telegram_id });
-    return data;
-  },
+    // Accepts telegram_id and optional extra user data (username, first_name, last_name)
+    verifyUser: (telegram_id, userData = {}) =>
+      api.post('/auth/verify', { telegram_id, ...userData }),
+
+  // === УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ===
+  getAllUsers: () => api.get('/users'),
+  
+  updateUserRole: (userId, role) => 
+    api.put(`/users/${userId}/role?role=${role}`),
+  
+  toggleUserStatus: (userId, isActive) => 
+    api.put(`/users/${userId}/status?is_active=${isActive}`),
 
   // === TIMELINE ===
   async getTimeline(params = {}) {
@@ -225,4 +233,12 @@ async getCellDetails(period, categoryName, groupBy = 'month') {
     const { data } = await api.delete(`/analytics/blocks/${id}`);
     return data;
   },
+  // === КАССИРСКИЕ ОТЧЁТЫ ===
+  getCashierReports: (params) => api.get('/cashier/reports', { params }),
+  
+  getCashierReportDetails: (reportId) => api.get(`/cashier/reports/${reportId}`),
+  
+  getLocations: () => api.get('/cashier/locations'),
+  
+  getPaymentMethods: () => api.get('/cashier/payment-methods'),
 };
